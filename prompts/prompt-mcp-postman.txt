@@ -1,0 +1,124 @@
+Analiza todos los @RestController de este proyecto Spring Boot y crea en Postman (vía MCP de Postman, servidor https://mcp.postman.com/mcp, modo Full, ya autenticado) una colección funcional de punta a punta para demo.
+
+OBJETIVO
+Generar colección + entorno completamente operativos, sin pasos manuales posteriores. Si la API está protegida, incluir flujo de autenticación y propagación del token de forma reproducible.
+
+ALCANCE
+- Inspecciona código fuente Java: @RestController, DTOs de request/response, application.properties / application.yml.
+- Inspecciona seguridad cuando exista (ver sección SEGURIDAD Y TOKENS).
+- Incluye todos los endpoints reales definidos en @RestController.
+- No inventes rutas, headers obligatorios ni parámetros que no existan en código.
+
+REQUISITOS DE COLECCIÓN
+1) Estructura
+- Crea una colección nueva con nombre claro (ej.: "<nombre-proyecto> REST API").
+- Agrupa requests por recurso en carpetas (prefijo /api/... o dominio funcional).
+- En descripción de colección y carpetas documenta:
+  - controlador de origen,
+  - path params reales,
+  - query params reales; si no hay, texto explícito: "No hay query params en este recurso".
+
+2) URLs y variables
+- TODAS las requests deben usar {{baseUrl}} en la URL (sin host fijo).
+- Ejemplo: {{baseUrl}}/api/v1/users
+- Política de alcance (OBLIGATORIA): baseUrl debe existir en variables de COLECCIÓN (collection.variable), no en variables globales de workspace.
+- Prohibido usar variables globales de workspace como fallback para baseUrl.
+- Objetivo de robustez: la colección debe resolver {{baseUrl}} al abrir cualquier request aunque no haya entorno seleccionado.
+
+3) Params
+- Path params: exactamente como en el código.
+- Query params: solo si existen (@RequestParam, filtros Pageable documentados, etc.).
+
+4) Bodies JSON
+- POST/PUT/PATCH: cuerpo JSON de ejemplo alineado con los DTOs del proyecto.
+- Header Content-Type: application/json cuando corresponda.
+
+5) Tests Postman
+- Scripts de test por request según el controlador:
+  - GET / PUT con cuerpo de respuesta -> 200
+  - POST de creación -> 201
+  - DELETE sin cuerpo -> 204
+  - u otro código HTTP si el código lo define explícitamente.
+- Asertos mínimos (JSON válido, array/objeto esperado) cuando aplique.
+
+SEGURIDAD Y TOKENS (OBLIGATORIO: ANALIZAR ANTES DE CREAR REQUESTS DE NEGOCIO)
+1) Detección
+- Revisa dependencias (p. ej. spring-boot-starter-security, resource-server OAuth2, JWT libraries).
+- Revisa configuración: SecurityFilterChain, WebSecurityConfigurerAdapter (legacy), ResourceServerConfigurer, filtros JWT personalizados, @EnableMethodSecurity / @PreAuthorize en controllers o servicios expuestos por HTTP.
+- Revisa documentación OpenAPI/Swagger si define securitySchemes (bearer, oauth2, apiKey).
+
+2) Si NO hay seguridad aplicable a los endpoints REST analizados
+- Indica en la descripción de la colección: "API sin autenticación para estos endpoints" (o equivalente según hallazgos).
+- No crees carpeta Auth ni variables de token innecesarias.
+
+3) Si SÍ hay seguridad
+- Identifica el mecanismo real (sesión + form login, HTTP Basic, JWT en Authorization Bearer, OAuth2 client credentials / password / authorization code, API Key en header o query, mTLS no automatizable en Postman -> solo documentar).
+- Localiza en código los endpoints o flujos para obtener credenciales o token (login, /oauth2/token, /auth/login, etc.) y los DTOs de petición/respuesta reales.
+- Crea carpeta al inicio de la colección, p. ej. "Auth" o "Seguridad", con las requests mínimas para demo:
+  - Login / token según el proyecto; bodies de ejemplo válidos según DTOs.
+  - En el test script de la respuesta exitosa, persiste en variables de entorno (o de colección si el MCP no permite secret en env) los valores necesarios, por ejemplo:
+    - pm.environment.set("token", json.access_token) o el campo real del JSON.
+    - Si hay refresh_token, client_id, expires_in, guardar solo lo necesario para la demo.
+- Variables de entorno "Spring Boot Local" (además de baseUrl):
+  - token (o accessToken): valor inicial vacío o placeholder; enabled true; type default o secret según política (secret para valores sensibles en demo).
+  - Si aplica: username, password, clientId, clientSecret como secret o deshabilitadas con descripción "rellenar para demo".
+- Propagación del token:
+  - Opción preferida: Authorization Bearer {{token}} en las requests protegidas (headerData) O documentación clara + pre-request a nivel colección si el MCP lo soporta de forma fiable.
+  - Si SecurityConfig define rutas permitidas sin auth (permitAll), documenta qué carpetas/requests NO llevan token.
+- Tests en requests de negocio: además del status esperado, si la API devuelve 401/403 sin token, opcionalmente un test que indique "obtener token primero" (solo si no ensucia la demo).
+
+REQUISITOS DE ENTORNO (CRÍTICO)
+Crear o actualizar un entorno llamado "Spring Boot Local" y garantizar:
+- baseUrl: http://localhost:HOST (HOST y esquema http/https según application.properties/yml; si hay server.ssl.enabled, usar https y puerto correcto).
+- enabled: true; type: default para baseUrl.
+- Si hay seguridad: variables de token/credenciales creadas y coherentes con el flujo Auth (ver arriba).
+- Nota: el entorno es complementario. La fuente mínima obligatoria para baseUrl es la variable de colección.
+
+IMPORTANTE
+- No basta con usar {{baseUrl}} o {{token}} en URLs/headers: las variables deben existir en el entorno (o colección) con valores o placeholders correctos.
+- Para baseUrl, prioriza SIEMPRE colección:
+  - collection.variable baseUrl con valor final correcto.
+  - environment.baseUrl opcional/recomendado para alternar contextos.
+  - NO crear ni modificar baseUrl en globals de workspace.
+- Si el entorno ya existe: putEnvironment preservando claves no conflictivas y sobrescribiendo/asegurando baseUrl y variables de auth necesarias.
+- No commitear secretos reales en la colección exportada; usar placeholders y type secret donde corresponda.
+
+ORDEN DE IMPLEMENTACIÓN MCP (OBLIGATORIO)
+1) Descubre workspace destino (si no se indica, usa un workspace personal del usuario vía API/MCP).
+2) Analiza seguridad (pom + Security* + filtros + controllers) y define plan Auth + variables.
+3) createCollection (colección mínima; item vacío o plano si anidado falla) y define collection.variable.baseUrl con valor final.
+4) createCollectionFolder por recurso; si hay auth, carpeta "Auth" primero.
+5) createCollectionRequest por endpoint (events/tests, rawModeData, headerData, auth si aplica).
+6) createEnvironment o putEnvironment para "Spring Boot Local" con baseUrl y variables de token/credenciales si aplica.
+7) Verificación: getCollection(model=full) + getEnvironment:
+   - todas las URLs usan {{baseUrl}};
+   - baseUrl presente y con valor en collection.variable (obligatorio);
+   - baseUrl presente y con valor en environment (si entorno creado/actualizado);
+   - NO existe dependencia de globals de workspace para baseUrl;
+   - si hay seguridad: variable de token presente y request de login/token creada con script que la rellena.
+8) Validación funcional final:
+   - abrir una request de la colección y confirmar que {{baseUrl}} resuelve sin advertencia de "Switch environment";
+   - si hay advertencia, corregir collection.variable baseUrl y repetir verificación.
+
+RESTRICCIONES
+- Si createCollection con árbol anidado falla por validación, usar flujo incremental (colección mínima -> carpetas -> requests).
+- No usar putCollection para reemplazar toda la colección salvo que dispongas de todos los id/uid exigidos.
+- No dejar la demo a medias: entorno seleccionable y requests ejecutables en orden lógico (Auth primero si aplica).
+- No usar updateWorkspaceGlobalVariables para setear baseUrl de esta demo.
+
+EXPORTS EN REPO (RESPALDO / REVISIÓN GIT)
+Guardar bajo postman/ en la raíz del proyecto (o ruta que indique el usuario):
+- *.postman_collection.json (formato colección v2.1).
+- *.postman_environment.json (formato entorno v2.1), incluyendo baseUrl y variables de auth si existen (sin secretos reales).
+
+SALIDA FINAL OBLIGATORIA (RESPUESTA DEL AGENTE)
+1) Nombre de la colección.
+2) Workspace donde quedó (nombre + id).
+3) UID de la colección y UID del entorno.
+4) Tabla: recurso (carpeta) -> rutas HTTP.
+5) Confirmación explícita:
+   - baseUrl en collection.variable creada/actualizada y valor final;
+   - baseUrl en environment creada/actualizada (si aplica) y valor final;
+   - confirmación de que NO depende de globals de workspace.
+6) Seguridad: "sin autenticación" O tipo detectado + nombre de carpeta Auth + variables creadas + cómo se obtiene el token en la demo.
+7) Número total de requests creadas.
